@@ -1,0 +1,317 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <title>TensorFlow.js linear regression</title>
+  <!-- Load TensorFlow.js -->
+  <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs/dist/tf.min.js"></script>
+  <!-- Load TensorFlow.js visualization library -->
+  <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs-vis"></script>
+</head>
+<body>
+
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/materialize/1.0.0/css/materialize.min.css">
+<link href="https://fonts.googleapis.com/icon?family=Material+Icons" rel="stylesheet">
+
+<div class="section no-pad-bot" id="index-banner">
+  <div class="container">
+    <h5 class="header center blue-text small">Linear regression with TensorFlow.js</h5>
+    <div class="row center">
+      <h6 class="header col s12 light">Train a model to predict house price from living space.</h6>
+    </div>
+  </div>
+</div>
+
+<div class="section no-pad-bot light-blue lighten-4">
+  <div class="container">
+    <div class="row center">
+      <button id="toggle-button" class="waves-effect waves-light light-blue btn-small" onclick="toggleVisor()">Toggle Visor</button>
+      <br/><br/>
+    </div>
+  </div>
+</div>
+
+<div class="container">
+  <div class="section">
+    <div class="row">
+      <div class="col s12 m6">
+        <h5>Train & Test</h5>
+        <button id="train-button" class="btn" onclick="run()">Train</button>
+      </div>
+
+      <div class="col s12 m6">
+        <h5>Predict</h5>
+        <input type="number" id="prediction-input" placeholder="2000"/>
+        <button id="predict-button" class="btn" disabled onclick="predict()">Predict</button>
+        <p id="prediction-output"></p>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script>
+/*
+  Global variables
+  ----------------
+  - points: array of {x: sqft, y: price} for plotting and training
+  - model: the TensorFlow.js sequential model
+  - normalisedFeature: object {tensor, min, max} for input features
+  - normalisedLabel: object {tensor, min, max} for labels
+*/
+let points;
+let model;
+let normalisedFeature;
+let normalisedLabel;
+
+/* 
+  Function: normalise
+  -------------------
+  Normalises a tensor to range [0,1] using min-max scaling.
+  Can also take previous min/max for consistent normalisation.
+  ML Pipeline step: Preprocessing features or labels.
+*/
+function normalise(tensor, previousMin = null, previousMax = null) {
+  const min = previousMin || tensor.min();
+  const max = previousMax || tensor.max();
+  const normalisedTensor = tensor.sub(min).div(max.sub(min));
+  return { tensor: normalisedTensor, min, max };
+}
+
+/* 
+  Function: denormalise
+  ---------------------
+  Converts a normalized tensor back to its original scale.
+  ML Pipeline step: Postprocessing model output to human-readable values.
+*/
+function denormalise(tensor, min, max) {
+  return tensor.mul(max.sub(min)).add(min);
+}
+
+/*
+  Function: plot
+  ---------------
+  Plots the dataset points and optionally predicted points using tfjs-vis.
+  ML Pipeline step: Data visualization / Exploratory Data Analysis (EDA)
+*/
+async function plot(pointsArray, featureName, predictedPointsArray = null) {
+  const values = [pointsArray];
+  const series = ["original"];
+
+  if (Array.isArray(predictedPointsArray)) {
+    values.push(predictedPointsArray);
+    series.push("predicted");
+  }
+
+  tfvis.render.scatterplot(
+    { name: `${featureName} vs House Price` },
+    { values, series },
+    { xLabel: featureName, yLabel: "Price" }
+  );
+}
+
+/*
+  Function: plotPredictionLine
+  -----------------------------
+  Generates a smooth prediction line from the model over 100 points.
+  ML Pipeline step: Visualization of model predictions against real data.
+*/
+async function plotPredictionLine() {
+  const [xs, ys] = tf.tidy(() => {
+    // 1. Generate 100 normalized inputs from 0 to 1
+    const normalisedXs = tf.linspace(0, 1, 100);
+    // 2. Predict normalized outputs from model
+    const normalisedYs = model.predict(normalisedXs.reshape([100, 1]));
+    // 3. Denormalize both inputs and outputs
+    const xs = denormalise(normalisedXs, normalisedFeature.min, normalisedFeature.max);
+    const ys = denormalise(normalisedYs, normalisedLabel.min, normalisedLabel.max);
+    return [xs.dataSync(), ys.dataSync()];
+  });
+
+  const predictedPoints = Array.from(xs).map((val, i) => ({
+    x: val,
+    y: ys[i]
+  }));
+
+  await plot(points, "Square feet", predictedPoints);
+}
+
+/*
+  Function: createModel
+  ---------------------
+  Builds a sequential model with:
+    - Hidden layer: 20 units, sigmoid activation (non-linear)
+    - Output layer: 1 unit, linear activation (final prediction)
+  ML Pipeline step: Model definition (architecture)
+*/
+function createModel() {
+  const model = tf.sequential();
+
+  // Hidden layer allows learning non-linear relationships
+  model.add(tf.layers.dense({
+    units: 20,
+    activation: 'sigmoid',
+    inputShape: [1] // single feature input
+  }));
+
+  // Output layer for final prediction
+  model.add(tf.layers.dense({
+    units: 1,
+    activation: 'linear'
+  }));
+
+  // Compile model with Mean Squared Error loss and SGD optimizer
+  model.compile({
+    loss: 'meanSquaredError',
+    optimizer: tf.train.sgd(0.1)
+  });
+
+  return model;
+}
+
+/*
+  Function: trainModel
+  --------------------
+  Fits the model to training data.
+  ML Pipeline step: Training
+  - batchSize: how many samples per weight update
+  - epochs: how many passes over the dataset
+  - validationSplit: fraction for validation
+  - shuffle: randomize order
+  - callbacks:
+      - plot prediction line at beginning of each epoch
+      - show loss using tfjs-vis
+  Enables prediction button when training completes
+*/
+async function trainModel(model, trainingFeatureTensor, trainingLabelTensor) {
+  const result = await model.fit(trainingFeatureTensor, trainingLabelTensor, {
+    batchSize: 32,
+    epochs: 100,
+    validationSplit: 0.2,
+    shuffle: true,
+    callbacks: {
+      // Visualize the evolving prediction line at start of each epoch
+      onEpochBegin: async () => {
+        await plotPredictionLine();
+      },
+      ...tfvis.show.fitCallbacks(
+        { name: "Training Performance" },
+        ["loss"],
+        { height: 200, callbacks: ["onEpochEnd"] }
+      )
+    }
+  });
+
+  // Enable predict button after training
+  document.getElementById("predict-button").removeAttribute("disabled");
+
+  return result;
+}
+
+/*
+  Function: plotParams
+  --------------------
+  Tool for manually setting weights/bias of first layer for experimentation.
+  ML Pipeline step: Debug / Visualize model behavior.
+  Used from browser console only.
+*/
+async function plotParams(weight, bias) {
+  model.getLayer(null, 0).setWeights([
+    tf.tensor2d([[weight]]),
+    tf.tensor1d([bias]),
+  ]);
+
+  await plotPredictionLine();
+
+  const layer = model.getLayer(undefined, 0);
+  tfvis.show.layer({ name: "Layer 1" }, layer);
+}
+
+/*
+  Function: predict
+  -----------------
+  Runs the model on a single input from user.
+  ML Pipeline step: Inference
+  - Normalizes input
+  - Feeds through model
+  - Denormalizes output
+  - Displays prediction
+*/
+async function predict() {
+  const predictionInput = parseInt(document.getElementById("prediction-input").value);
+
+  if (isNaN(predictionInput)) {
+    alert("Please enter a valid number");
+  } else {
+    tf.tidy(() => {
+      const inputTensor = tf.tensor1d([predictionInput]);
+      const normalisedInput = normalise(inputTensor, normalisedFeature.min, normalisedFeature.max);
+      const normalisedOutputTensor = model.predict(normalisedInput.tensor);
+      const outputTensor = denormalise(normalisedOutputTensor, normalisedLabel.min, normalisedLabel.max);
+      const outputValue = outputTensor.dataSync()[0];
+
+      document.getElementById("prediction-output").innerHTML =
+        `The predicted house price is:<br>
+        <span style="font-size:2em">$${(outputValue/1000).toFixed(0)*1000}</span>`;
+    });
+  }
+}
+
+/*
+  Function: run
+  -------------
+  Main workflow:
+    1. Load dataset from CSV
+    2. Convert to array of points for plotting
+    3. Shuffle and ensure even number of points (needed for tf.split)
+    4. Plot raw data
+    5. Convert features/labels to tensors
+    6. Normalize features and labels
+    7. Split into training and testing sets
+    8. Create the model
+    9. Train the model
+    10. Plot final prediction line
+  ML Pipeline steps: Data loading → preprocessing → training → visualization
+*/
+async function run() {
+  const dataset = tf.data.csv("kc_house_data.csv");
+
+  // Convert CSV dataset to {x,y} objects
+  const pointsDataset = dataset.map(record => ({
+    x: record.sqft_living,
+    y: record.price
+  }));
+
+  points = await pointsDataset.toArray();
+  if (points.length % 2 !== 0) {
+    points.pop(); // ensure even number for splitting
+  }
+  tf.util.shuffle(points);
+
+  // Plot raw data
+  await plot(points, "Square feet");
+
+  // Convert to tensors
+  const featureTensor = tf.tensor2d(points.map(p => p.x), [points.length, 1]);
+  const labelTensor = tf.tensor2d(points.map(p => p.y), [points.length, 1]);
+
+  // Normalize tensors
+  normalisedFeature = normalise(featureTensor);
+  normalisedLabel = normalise(labelTensor);
+
+  // Split into training/testing
+  const [trainX, testX] = tf.split(normalisedFeature.tensor, 2);
+  const [trainY, testY] = tf.split(normalisedLabel.tensor, 2);
+
+  // Create and compile model
+  model = createModel();
+
+  // Train model
+  await trainModel(model, trainX, trainY);
+
+  // Plot final prediction line
+  await plotPredictionLine();
+}
+
+</script>
+
+</body>
+</html>
