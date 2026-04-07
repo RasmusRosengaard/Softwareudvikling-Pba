@@ -1,0 +1,170 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <title>TensorFlow.js linear regression</title>
+  <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs/dist/tf.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs-vis"></script>
+</head>
+<body>
+
+<script type="text/javascript">
+
+  async function plot(pointsArray, featureName) {
+    tfvis.render.scatterplot(
+      { name: `${featureName} vs House Price` },
+      { values: [pointsArray], series: ["original"] },
+      {
+        xLabel: featureName,
+        yLabel: "Price",
+      }
+    )
+  }
+
+  function createModel () {
+
+    // Create a sequential model (layers stacked one after another)
+  const model = tf.sequential();   
+
+    // Add one layer to the model
+    model.add(tf.layers.dense({
+      // Input has 1 feature (one number per example)
+      inputDim: 1,
+      // The layer has 1 neuron → outputs 1 number
+      units: 1,
+      // "linear" means no transformation → output = wx + b
+      activation: "linear",
+      // Include a bias the b in the equation y = wx + b
+      useBias: true
+    }));
+
+    // Stochastic Gradient Descent optimizer
+    // 0.1 = learning rate (step size when updating weights)
+    const optimizer = tf.train.sgd(0.1);
+
+    // Configure how the model learns
+    model.compile({
+
+      // use the optimizer defined above
+      optimizer: optimizer,
+
+      // Loss function (what the model tries to minimize)
+      // Mean Squared Error = average squared difference between prediction and true value
+      loss: "meanSquaredError"
+    });
+
+    return model;
+  }
+
+  async function trainModel(model, trainingFeatureTensor, trainingLabelTensor) {
+      const { onBatchEnd, onEpochEnd } = tfvis.show.fitCallbacks(
+        { name: "Training Performance", tab: "Training" },
+        ["loss"]
+      );
+      await model.fit(trainingFeatureTensor, trainingLabelTensor, {
+        epochs: 2,
+        shuffle: true,
+
+        // callsback to be called during training: (onBatchEnd & OnEpochEnd, from docs)
+        callbacks: {
+          onBatchEnd,
+          onEpochEnd,
+
+          // runs at start of each epoch (epoch = one full pass through the training data)
+          // visualise the weights(kernels) and bias(bias) of the layer at the start of each epoch 
+          // y = wx + b 
+          // x = input, y = output, w = kernel(weight), b = bias
+          onEpochBegin: function () {
+            tfvis.show.layer(
+              { name: `Layer 1`, tab: "Model Inspection" },
+              model.getLayer(undefined, 0)
+            );
+          }
+        }
+      });
+  }
+
+  function testModel(model, testingFeatureTensor, testingLabelTensor) {
+    const lossTensor = model.evaluate(testingFeatureTensor, testingLabelTensor);
+    console.log(lossTensor);
+    const loss = lossTensor.dataSync();
+    console.log(`Testing Loss: ${loss}`);
+  }
+
+  function normalise(tensor) {
+    const min = tensor.min();
+    const max = tensor.max();
+    const normalisedTensor = tensor.sub(min).div(max.sub(min));
+    return {
+      tensor: normalisedTensor,
+      min,
+      max
+    };
+  }
+
+  function denormalise(tensor, min, max) {
+    const denormalisedTensor = tensor.mul(max.sub(min)).add(min);
+    return denormalisedTensor;
+  }
+
+
+  async function importData(filepath) {
+    // Import from CSV
+    const dataset = tf.data.csv(filepath);
+
+    // Extract x and y values to plot
+    const pointsDataset = dataset.map(record => ({
+        x: record.sqft_living,
+        y: record.price,
+    }));
+    const points = await pointsDataset.toArray();
+      if(points.length % 2 !== 0) { // If odd number of elements
+        points.pop(); // remove one element
+    }
+    return points;
+  }
+
+  async function run () {
+    const points = await importData("kc_house_data.csv");
+
+    tf.util.shuffle(points);
+    plot(points, "Square feet");
+
+
+
+    // Extract Features (inputs)
+    const featureValues = points.map(p => p.x);
+    const featureTensor = tf.tensor2d(featureValues, [featureValues.length, 1]);
+
+    // Extract Labels (outputs)
+    const labelValues = points.map(p => p.y);
+    const labelTensor = tf.tensor2d(labelValues, [labelValues.length, 1]);
+
+    // Normalise features and labels
+    const normalisedFeature = normalise(featureTensor);
+    const normalisedLabel = normalise(labelTensor);
+
+    const [trainingFeatureTensor, testingFeatureTensor] = tf.split(normalisedFeature.tensor, 2);
+    const [trainingLabelTensor, testingLabelTensor] = tf.split(normalisedLabel.tensor, 2);
+  
+    const model = createModel();
+    model.summary();
+
+    tfvis.show.modelSummary({ name: "Model Summary", tab: 'Model' }, model);
+    tfvis.show.layer({ name: `Layer 1`, tab: `Model Inspection` }, model.getLayer(undefined, 0));
+
+    // Made it async to so the testing is done after the training.
+    await trainModel(model, trainingFeatureTensor, trainingLabelTensor);
+
+    // tested on 1 epoch (closer when trying on 2 epochs)
+    // Testing loss = 0.005194300319999456
+    // Training loss = 0.0069189
+    testModel(model, testingFeatureTensor, testingLabelTensor);
+  }
+
+  run();
+</script>
+
+
+  <h1></h1>
+</body>
+</html>

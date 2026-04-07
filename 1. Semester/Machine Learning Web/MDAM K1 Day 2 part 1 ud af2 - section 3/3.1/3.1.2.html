@@ -1,0 +1,72 @@
+<!DOCTYPE html>
+<html lang="en-US">
+  <head>
+    <meta charset="utf-8" />
+    <title>TensorFlow.js browser example</title>
+
+    <!-- Load TensorFlow.js from a script tag -->
+    <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@latest/dist/tf.min.js"></script>
+  </head>
+  <body>
+    <h1>TensorFlow.js example</h1>
+    <h2>Open the console to see the results.</h2>
+    <script>
+
+      // exercise 2 \\
+      function getYs(xs, m, c) {
+        return tf.tidy(() => {
+          return xs.mul(tf.scalar(m)).add(tf.scalar(c)); 
+          // returnere y = m * x + c for hver x i xs
+        });
+      }
+      const t1 = tf.tensor1d([1,5,10]);
+      const t2 = getYs(t1, 2, 1);
+      t2.print();
+
+      t1.dispose();
+      t2.dispose();
+    
+
+
+      // exercise 3 \\
+      const t3 = tf.tensor1d([25, 76, 4, 23, -5, 22]);
+      const max = t3.max(); // 76
+      const min = t3.min(); // -5
+      max.dispose();
+      min.dispose();
+      
+      // skalerer værdierne i t3 til at være mellem 0 og 1, hvor min bliver 0 og max bliver 1
+      function normalizeMinMax(tensor) {
+
+        return tf.tidy(() => {  // nødvendigt at bruge tidy til oprydning da .add, .max osv opretter en ny tensor (skalar)
+          const min = tensor.min(); // mindste værdi i tensor
+          const max = tensor.max(); // højeste værdi i tensor
+
+          // trækker minimums værdien fra alle elementer (x - min)
+          // divider derefter med afstanden(max - min) for at skalere til intervallet [0, 1]
+          return tensor.sub(min).div(max.sub(min))
+          });
+      }
+
+      const t4 = normalizeMinMax(t3);
+      t4.print();
+      t3.dispose();
+      t4.dispose();
+      
+
+      // exercise 4 \\
+      for (let i = 0; i < 100; i++) {
+          const t = tf.tensor1d([1,2,3]);
+          t.dispose(); // skal kaldes for hver tensor, der oprettes, 
+          // for at frigøre den hukommelse, som tensoren bruger, når den ikke længere er nødvendig
+      }
+
+      tf.tidy(() => {
+          for (let i = 0; i < 100; i++) {
+              tf.tensor1d([4,5,6]);
+          }
+      }); // rydder automatisk op i alle tensors, der blev oprettet inden for denne funktion, når den er færdig
+      console.log(tf.memory());
+    </script>
+  </body>
+</html>

@@ -1,0 +1,180 @@
+<!DOCTYPE html>
+<html lang="en-US">
+  <head>
+    <meta charset="utf-8" />
+    <title>Software Engineer Salary Prediction</title>
+
+    <!-- Load TensorFlow.js -->
+    <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@latest/dist/tf.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs-vis"></script>
+  </head>
+  <body>
+    <h1>Software Engineer Salary Prediction</h1>
+
+    <!-- User input -->
+    <div style="margin-top:20px;">
+      <input id="yearsInput" type="number" placeholder="Years of experience" />
+      <button onclick="predictSalary()">Predict Salary</button>
+      <h3 id="result"></h3>
+    </div>
+
+    <script>
+      let model;
+      let normalisedFeature;
+      let normalisedLabel;
+
+      async function run() {
+        await tf.ready();
+
+        // Load CSV (same folder)
+        const dataset = tf.data.csv('job_salary_prediction_dataset.csv', {
+          hasHeader: true
+        });
+
+        // Filter rows: only Software Engineer
+        const pointsDataset = dataset.map(record => {
+          if (record.job_title !== "Software Engineer") return null;
+
+          const x = Number(record.experience_years);
+          const y = Number(record.salary);
+
+          if (isNaN(x) || isNaN(y)) return null;
+
+          return { x, y };
+        }).filter(x => x != null);
+
+        const points = await pointsDataset.toArray();
+        if (points.length === 0) {
+          alert("No Software Engineer rows found in CSV!");
+          return;
+        }
+
+        // Shuffle data
+        tf.util.shuffle(points);
+        console.log("Shuffled rows:", points.length);
+
+        // Extract feature
+        const featureValues = points.map(p => p.x);
+        const featureTensor = tf.tensor2d(featureValues, [featureValues.length, 1]);
+        console.log("Feature tensor shape:", featureTensor.shape);
+
+        // Extract label
+        const labelValues = points.map(p => p.y);
+        const labelTensor = tf.tensor2d(labelValues, [labelValues.length, 1]);
+        console.log("Label tensor shape:", labelTensor.shape);
+
+        // Normalise features and labels
+        normalisedFeature = await normalise(featureTensor);
+        normalisedLabel = await normalise(labelTensor);
+        console.log("Normalized features and labels");
+
+        // Calculate train/test sizes
+        const { trainSize: calculatedTrainSize, testSize: calculatedTestSize } =
+          calcTrainSizeAndTestSize(normalisedFeature, 0.8);
+
+        // Split into train/test tensors
+        const [trainFeature, testFeature] = tf.split(
+          normalisedFeature.normalisedTensor,
+          [calculatedTrainSize, calculatedTestSize]
+        );
+        const [trainLabel, testLabel] = tf.split(
+          normalisedLabel.normalisedTensor,
+          [calculatedTrainSize, calculatedTestSize]
+        );
+        console.log(
+          "Train/Test shapes:",
+          trainFeature.shape,
+          testFeature.shape,
+          trainLabel.shape,
+          testLabel.shape
+        );
+
+        // Create simple model
+        model = tf.sequential();
+        model.add(tf.layers.dense({ inputShape: [1], units: 1 }));
+
+        model.compile({
+          optimizer: tf.train.sgd(0.1),
+          loss: 'meanSquaredError'
+        });
+
+        // Train model (10 epochs, batch size 512, no visualization)
+        await model.fit(trainFeature, trainLabel, {
+          epochs: 10,
+          batchSize: 512
+        });
+
+        // Predict on test data
+        const preds = model.predict(testFeature);
+
+        // Denormalize predictions and labels
+        const denormPreds = denormalise(preds, normalisedLabel.min, normalisedLabel.max);
+        const denormLabels = denormalise(testLabel, normalisedLabel.min, normalisedLabel.max);
+
+        // Convert to arrays    
+        const predValues = await denormPreds.data();
+        const labelValuesTest = await denormLabels.data();
+        const featureValuesTest = await denormalise(testFeature, normalisedFeature.min, normalisedFeature.max).data();
+
+        // Scatterplot: Predictions vs Actual
+        const predictedPoints = Array.from(featureValuesTest).map((x, i) => ({ x, y: predValues[i] }));
+        const actualPoints = Array.from(featureValuesTest).map((x, i) => ({ x, y: labelValuesTest[i] }));
+
+        tfvis.render.scatterplot(
+          { name: 'Predictions vs Actual' },
+          { values: [actualPoints, predictedPoints], series: ['Actual', 'Predicted'] },
+          { xLabel: 'Years of Experience', yLabel: 'Salary' }
+        );
+
+        console.log("Model ready!");
+      }
+
+      // Predict user input
+      async function predictSalary() {
+        const input = document.getElementById('yearsInput').value;
+
+        if (input < 0) {
+          alert("Your experience can't be negative!");
+          return;
+        } 
+        const years = Number(input);
+
+        if (isNaN(years)) {
+          alert("Enter a valid number");
+          return;
+        }
+
+        const inputTensor = tf.tensor2d([years], [1, 1]);
+        const normInput = inputTensor.sub(normalisedFeature.min).div(normalisedFeature.max.sub(normalisedFeature.min));
+        const pred = model.predict(normInput);
+        const denormPred = denormalise(pred, normalisedLabel.min, normalisedLabel.max);
+
+        const value = (await denormPred.data())[0];
+        document.getElementById('result').innerText = `Estimated salary yearly: ${value}$`;
+      }
+
+      // Calculate train/test sizes
+      function calcTrainSizeAndTestSize(featureTensor, trainPercentage) {
+        const totalRows = featureTensor.normalisedTensor.shape[0];
+        const trainSize = Math.floor(totalRows * trainPercentage);
+        const testSize = totalRows - trainSize;
+        return { trainSize, testSize };
+      }
+
+      // Normalise
+      async function normalise(tensor) {
+        const max = tensor.max();
+        const min = tensor.min();
+        const normalisedTensor = tensor.sub(min).div(max.sub(min));
+        return { normalisedTensor, min, max };
+      }
+
+      // Denormalise
+      function denormalise(tensor, min, max) {
+        return tensor.mul(max.sub(min)).add(min);
+      }
+
+      run();
+    </script>
+  </body>
+</html>
